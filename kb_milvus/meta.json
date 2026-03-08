@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-03-09T03:21:38",
+  "num_chunks": 137,
+  "embedding_model": "text-embedding-v3",
+  "pdf_mode": "vl",
+  "vector_db": "milvus",
+  "collection_name": "insurance_knowledge"
+}

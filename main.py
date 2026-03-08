@@ -8,6 +8,7 @@ from .config import Settings
 from .evaluate import evaluate_dataset
 from .extractors import extract_text_from_file
 from .knowledge_base import build_knowledge_base, load_knowledge_base, KnowledgeBase, retrieve_relevant_rules
+from .enhanced_auditor import enhanced_audit_marketing_text
 from . import knowledge_base_milvus
 
 
@@ -83,12 +84,23 @@ def cmd_audit_text(args: argparse.Namespace) -> None:
     else:  # numpy
         kb = load_knowledge_base(args.kb_dir)
 
-    result = audit_marketing_text(
-        marketing_text=args.text,
-        kb=kb,
-        client=client,
-        top_k=args.top_k,
-    )
+    # 选择审核模式
+    if args.enhanced:
+        result = enhanced_audit_marketing_text(
+            marketing_text=args.text,
+            kb=kb,
+            client=client,
+            top_k=args.top_k,
+            enable_math_confidence=args.math_confidence,
+        )
+    else:
+        result = audit_marketing_text(
+            marketing_text=args.text,
+            kb=kb,
+            client=client,
+            top_k=args.top_k,
+        )
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -189,6 +201,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--collection-name",
         default="insurance_knowledge",
         help="Milvus collection name (only used when --vector-db=milvus)",
+    )
+    p_text.add_argument(
+        "--enhanced",
+        action="store_true",
+        help="Enable enhanced audit mode with intent recognition and multi-stage reasoning",
+    )
+    p_text.add_argument(
+        "--math-confidence",
+        action="store_true",
+        help="Enable mathematical confidence calculation (works with --enhanced)",
     )
     p_text.set_defaults(func=cmd_audit_text)
 

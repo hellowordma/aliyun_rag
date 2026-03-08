@@ -1,9 +1,12 @@
 ﻿import json
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .bailian_client import BailianClient
-from .knowledge_base import KnowledgeBase, retrieve_relevant_rules
+from .knowledge_base import KnowledgeBase, retrieve_relevant_rules as numpy_retrieve_relevant_rules
+
+if TYPE_CHECKING:
+    from . import knowledge_base_milvus
 
 
 def _extract_json_block(text: str) -> dict[str, Any]:
@@ -31,16 +34,26 @@ def _build_rule_context(rules: list[dict]) -> str:
 
 def audit_marketing_text(
     marketing_text: str,
-    kb: KnowledgeBase,
+    kb: KnowledgeBase | Any,  # 支持 MilvusKnowledgeBase
     client: BailianClient,
     top_k: int = 6,
 ) -> dict[str, Any]:
-    rules = retrieve_relevant_rules(
-        query=marketing_text,
-        kb=kb,
-        client=client,
-        top_k=top_k,
-    )
+    # 根据知识库类型选择检索方法
+    if hasattr(kb, 'collection'):  # MilvusKnowledgeBase
+        from . import knowledge_base_milvus
+        rules = knowledge_base_milvus.retrieve_relevant_rules(
+            query=marketing_text,
+            kb=kb,
+            client=client,
+            top_k=top_k,
+        )
+    else:  # 原版 NumPy 知识库
+        rules = numpy_retrieve_relevant_rules(
+            query=marketing_text,
+            kb=kb,
+            client=client,
+            top_k=top_k,
+        )
 
     rule_context = _build_rule_context(rules)
 

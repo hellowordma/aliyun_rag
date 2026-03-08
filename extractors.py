@@ -98,6 +98,34 @@ def extract_text_from_image(path: Path, client: BailianClient) -> str:
     return normalize_text(text)
 
 
+def extract_text_from_markdown(path: Path) -> str:
+    """Extract text from Markdown file, removing formatting."""
+    import re
+
+    content = path.read_text(encoding="utf-8")
+
+    # 移除 Markdown 标记，但保留文本内容
+    # 移除标题标记
+    content = re.sub(r'^#+\s+', '', content, flags=re.MULTILINE)
+    # 移除加粗和斜体
+    content = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', content)  # ***text***
+    content = re.sub(r'\*\*(.+?)\*\*', r'\1', content)      # **text**
+    content = re.sub(r'\*(.+?)\*', r'\1', content)          # *text*
+    content = re.sub(r'~~(.+?)~~', r'\1', content)          # ~~text~~
+    # 移除链接但保留文本
+    content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
+    # 移除图片
+    content = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', content)
+    # 移除代码块
+    content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+    content = re.sub(r'`([^`]+)`', r'\1', content)
+    # 移除表格标记
+    content = re.sub(r'\|', '', content)
+    content = re.sub(r'^[-+:]{3,}$', '', content, flags=re.MULTILINE)
+
+    return normalize_text(content)
+
+
 def extract_text_from_file(
     file_path: str,
     client: BailianClient,
@@ -126,6 +154,8 @@ def extract_text_from_file(
             return extract_text_from_docx(converted)
         finally:
             converted.unlink(missing_ok=True)
+    if suffix == ".md":
+        return extract_text_from_markdown(path)
     if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}:
         return extract_text_from_image(path, client)
 
