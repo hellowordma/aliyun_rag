@@ -3,3 +3,5 @@ numpy>=1.26.0
 docx2txt>=0.9
 pypdf>=5.0.0
 PyMuPDF>=1.24.0
+python-dotenv>=1.0.0
+pymilvus[milvus_lite]>=2.4.0

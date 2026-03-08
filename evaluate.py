@@ -15,7 +15,7 @@ def evaluate_dataset(
     kb = load_knowledge_base(kb_dir)
     rows = [
         json.loads(line)
-        for line in Path(dataset_path).read_text(encoding="utf-8").splitlines()
+        for line in Path(dataset_path).read_text(encoding="utf-8-sig").splitlines()
         if line.strip()
     ]
 

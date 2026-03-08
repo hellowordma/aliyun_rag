@@ -30,7 +30,7 @@ class BailianClient:
         )
         return (completion.choices[0].message.content or "").strip()
 
-    def embed_texts(self, texts: list[str], batch_size: int = 16) -> np.ndarray:
+    def embed_texts(self, texts: list[str], batch_size: int = 10) -> np.ndarray:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), batch_size):
             batch = texts[start : start + batch_size]
