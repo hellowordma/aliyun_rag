@@ -8,10 +8,11 @@
 
 - ✅ **多模态输入** - 支持纯文本、图片、图文混合输入
 - ✅ **图片直接审核** - 使用 Qwen-VL 多模态大模型直接分析营销图片
-- ✅ **结构化输出** - 是否合规、违规类型、条文编号与原文、置信度
-- ✅ **RAG 技术增强** - 基于向量相似度的法规条文检索
-- ✅ **混合检索** - BM25 + 向量检索（可选）
+- ✅ **结构化输出** - 是否合规、违规类型、条文编号与原文、来源文件、置信度
+- ✅ **6路召回** - 3路稠密向量检索 + 3路稀疏检索（BM25）
+- ✅ **混合检索** - RRF 融合算法（0.7 稠密 + 0.3 稀疏）
 - ✅ **意图识别** - 7种违规类型自动识别
+- ✅ **问题重写** - 自动生成多个精确查询
 - ✅ **数学置信度** - 数学公式 + LLM 输出
 - ✅ **评估模块** - 准确率 100%
 
@@ -35,43 +36,38 @@ DASHSCOPE_API_KEY=sk-你的密钥
 
 **获取 API Key：** https://bailian.console.aliyun.com/
 
-### 3. 构建知识库
+### 3. 构建知识库（推荐 Milvus）
 
 ```bash
-# 使用 NumPy（默认）
-PYTHONPATH=/mnt/workspace:$PYTHONPATH python -m aliyun_rag.main build-kb \
-  --kb-dir kb \
-  --vector-db numpy \
-  --docs "references/保险销售行为管理办法.pdf" "references/互联网保险业务监管办法.docx"
-
-# 使用 Milvus Lite
+# 使用 Milvus Lite（推荐，支持6路召回）
 PYTHONPATH=/mnt/workspace:$PYTHONPATH python -m aliyun_rag.main build-kb \
   --kb-dir kb_milvus \
   --vector-db milvus \
   --collection-name insurance_knowledge \
-  --docs "references/保险销售行为管理办法.pdf" "references/互联网保险业务监管办法.docx"
+  --docs "references/保险销售行为管理办法.pdf" \
+       "references/互联网保险业务监管办法.docx" \
+       "references/金融产品网络营销管理办法（征求意见稿）.doc"
 ```
 
 ### 4. 运行 Demo
 
-#### CLI Demo（推荐云服务器环境）
+#### CLI Demo（推荐）
 
 ```bash
 python demo/cli_demo.py
 ```
 
-支持功能：
-- 文本审核
-- 图片审核
-- 图文混合审核
-- 批量测试
-- 知识库统计
+启动信息：
+```
+[KB] Milvus知识库: 176 个法规 chunks
+[KB] 支持稀疏向量(BM25): 是
+[KB] 6路召回: 稠密x3 + 稀疏x3
+```
 
 #### Web Demo
 
 ```bash
-cd demo
-./start.sh
+cd demo && bash start.sh
 ```
 
 访问：http://localhost:7860
@@ -84,12 +80,12 @@ cd demo
 aliyun_rag/
 ├── config.py                 # 配置管理
 ├── bailian_client.py         # 百炼API客户端（含多模态）
-├── extractors.py             # 文件文本提取
+├── extractors.py             # 文件文本提取（支持.doc通过antiword）
 ├── knowledge_base.py         # RAG知识库（NumPy）
-├── knowledge_base_milvus.py  # RAG知识库（Milvus）
+├── knowledge_base_milvus.py  # RAG知识库（Milvus + 稀疏向量）
 ├── hybrid_retriever.py       # 混合检索（BM25 + 向量）
 ├── auditor.py                # 基础审核器
-├── enhanced_auditor.py       # 增强审核器（意图识别）
+├── enhanced_auditor.py       # 增强审核器（6路召回）
 ├── multimodal_auditor.py     # 多模态审核器（图片/图文）
 ├── confidence_calculator.py  # 置信度计算模块
 ├── evaluate.py               # 效果评估模块
@@ -102,17 +98,12 @@ aliyun_rag/
 │   └── start.sh              # Shell启动脚本
 ├── test_data/                # 测试数据
 │   ├── images/               # 测试图片
-│   │   ├── violation_exaggerated_return.png
-│   │   ├── violation_misleading.png
-│   │   └── compliant_risk_warning.png
-│   ├── create_test_images.py # 测试图片生成脚本
 │   └── audit_results/        # 审核结果输出
 ├── kb/                       # NumPy知识库
 ├── kb_milvus/                # Milvus知识库元数据
 ├── milvus_demo.db            # Milvus数据库文件
-├── demo_cases.jsonl          # 测试数据集
-├── .env                      # API配置
-└── references/               # 监管文档
+├── .env.example              # 配置模板
+└── references/               # 监管文档（3个文件）
 ```
 
 ---
@@ -140,13 +131,14 @@ aliyun_rag/
   "violations": [
     {
       "type": "承诺保证收益",
-      "clause_id": "第九条",
-      "clause_text": "第九条 保险公司开展互联网保险销售...",
-      "reason": "营销内容中'保证年化收益8%'属于对保险产品收益作出确定性承诺...",
+      "clause_id": "第九条（三）",
+      "source_file": "金融产品网络营销管理办法（征求意见稿）.doc",
+      "clause_text": "第九条【禁止内容】...（三）明示或暗示资产管理产品保本、承诺收益...",
+      "reason": "营销内容中'保本'、'年化收益5%'属于对收益作出确定性承诺...",
       "confidence": 0.95
     }
   ],
-  "overall_confidence": 0.97,
+  "overall_confidence": 0.82,
   "summary": "该营销内容违规承诺保证收益，违背诚实信用原则...",
   "retrieved_rules": [...]
 }
@@ -161,40 +153,40 @@ aliyun_rag/
 | 支持文本/图文输入 | ✅ 完成 | 文本/图片/图文混合三种输入模式 |
 | 是否合规输出 | ✅ 完成 | `is_compliant: yes/no` |
 | 违规类型识别 | ✅ 完成 | `violations[].type` (7种类型) |
-| 条文编号与原文 | ✅ 完成 | `clause_id`, `clause_text` |
+| 条文编号与原文 | ✅ 完成 | `clause_id`, `clause_text`, `source_file` |
 | 置信度输出 | ✅ 完成 | 数学公式 + LLM 输出 |
 | 百炼大模型 API | ✅ 完成 | 通义千问兼容模式 API |
-| RAG 技术增强 | ✅ 完成 | 向量嵌入 + 相似度检索 + BM25 |
+| RAG 技术增强 | ✅ 完成 | 6路召回（稠密x3 + 稀疏x3） |
 | 评估模块 | ✅ 完成 | `evaluate.py`，准确率 100% |
 
 ---
 
 ## 🎓 演示代码实现
 
-### 1. 文本审核
+### 1. 文本审核（Milvus + 6路召回）
 
 ```python
-from aliyun_rag import audit_marketing_text
 from aliyun_rag.bailian_client import BailianClient
 from aliyun_rag.config import Settings
-from aliyun_rag.knowledge_base import load_knowledge_base
+from aliyun_rag.knowledge_base_milvus import load_knowledge_base
+from aliyun_rag.enhanced_auditor import enhanced_audit_marketing_text
 
 # 初始化
 settings = Settings.from_env()
 client = BailianClient(settings)
-kb = load_knowledge_base('kb')
+kb = load_knowledge_base(collection_name='insurance_knowledge', meta_dir='kb_milvus')
 
-# 审核文本
-result = audit_marketing_text(
-    marketing_text="本保险保证年化收益8%，稳赚不赔。",
+# 审核文本（6路召回）
+result = enhanced_audit_marketing_text(
+    marketing_text="本理财产品保本，年化收益率5%。",
     kb=kb,
     client=client,
     top_k=6,
 )
 
-print(result['is_compliant'])  # 'no'
-print(result['violations'])    # 违规项列表
-print(result['summary'])       # 总结
+print(result['is_compliant'])     # 'no'
+print(result['violations'])       # 违规项列表（含source_file）
+print(result['overall_confidence'])  # 融合置信度
 ```
 
 ### 2. 图片审核

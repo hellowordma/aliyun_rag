@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aliyun_rag.bailian_client import BailianClient
 from aliyun_rag.config import Settings
 from aliyun_rag.knowledge_base import load_knowledge_base, KnowledgeBase
+from aliyun_rag.knowledge_base_milvus import load_knowledge_base as load_milvus_kb
 from aliyun_rag.hybrid_retriever import create_hybrid_retriever, hybrid_retrieve_rules
 from aliyun_rag.auditor import audit_marketing_text
 from aliyun_rag.enhanced_auditor import enhanced_audit_marketing_text
@@ -40,13 +41,23 @@ class AuditDemo:
             settings.validate()
             self.client = BailianClient(settings)
 
-            # 加载知识库
-            self.kb = load_knowledge_base(self.kb_dir)
+            # 优先加载 Milvus 知识库（支持6路召回）
+            try:
+                self.kb = load_milvus_kb(collection_name='insurance_knowledge', meta_dir='kb_milvus')
+                self.kb_type = "milvus"
+            except Exception:
+                # 回退到 NumPy 知识库
+                self.kb = load_knowledge_base(self.kb_dir)
+                self.kb_type = "numpy"
 
-            # 创建混合检索器
-            self.hybrid_retriever = create_hybrid_retriever(self.kb_dir)
+            # 创建混合检索器（仅用于NumPy）
+            if self.kb_type == "numpy":
+                self.hybrid_retriever = create_hybrid_retriever(self.kb_dir)
+            else:
+                self.hybrid_retriever = None
 
-            return "✅ 资源加载成功！"
+            kb_info = f"Milvus (6路召回)" if self.kb_type == "milvus" else "NumPy"
+            return f"✅ 资源加载成功！知识库: {kb_info}"
         except Exception as e:
             return f"❌ 加载失败: {str(e)}"
 

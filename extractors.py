@@ -60,6 +60,20 @@ def extract_text_from_pdf_vl_ocr(
     return normalize_text("\n\n".join(page_texts))
 
 
+def extract_text_from_doc_with_antiword(doc_path: Path) -> str | None:
+    """Extract text from .doc file using antiword (Linux)."""
+    try:
+        result = subprocess.run(
+            ["antiword", str(doc_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return normalize_text(result.stdout)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+
 def convert_doc_to_docx_with_word(doc_path: Path) -> Path:
     """Convert .doc to .docx with local Microsoft Word COM automation."""
     if doc_path.suffix.lower() != ".doc":
@@ -148,7 +162,11 @@ def extract_text_from_file(
                 return extract_text_from_pdf_native(path)
         return extract_text_from_pdf_native(path)
     if suffix == ".doc":
-        # Best effort: convert with Word then parse as docx.
+        # Try antiword first (Linux), then fall back to Word COM (Windows).
+        text = extract_text_from_doc_with_antiword(path)
+        if text:
+            return text
+        # Fallback: convert with Word then parse as docx.
         converted = convert_doc_to_docx_with_word(path)
         try:
             return extract_text_from_docx(converted)

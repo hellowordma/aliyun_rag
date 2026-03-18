@@ -200,14 +200,15 @@ class EnhancedAuditor:
 
         if hasattr(kb, 'collection'):  # MilvusKnowledgeBase
             from . import knowledge_base_milvus
-            for query in rewritten_queries[:3]:  # 限制查询次数
-                rules = knowledge_base_milvus.retrieve_relevant_rules(
-                    query=query,
-                    kb=kb,
-                    client=client,
-                    top_k=top_k,
-                )
-                all_retrieved_rules.extend(rules)
+            # 使用混合检索（6路召回：3路稠密 + 3路稀疏）
+            all_retrieved_rules = knowledge_base_milvus.hybrid_retrieve(
+                queries=rewritten_queries[:3],
+                kb=kb,
+                client=client,
+                top_k=top_k,
+                dense_weight=0.7,
+                sparse_weight=0.3,
+            )
         else:  # NumPy KnowledgeBase
             from .knowledge_base import retrieve_relevant_rules
             for query in rewritten_queries[:3]:
@@ -218,10 +219,12 @@ class EnhancedAuditor:
                     top_k=top_k,
                 )
                 all_retrieved_rules.extend(rules)
+            # 去重并排序
+            unique_rules = cls._deduplicate_rules(all_retrieved_rules)
+            all_retrieved_rules = sorted(unique_rules, key=lambda x: x['score'], reverse=True)[:top_k * 2]
 
-        # 去重并排序
-        unique_rules = cls._deduplicate_rules(all_retrieved_rules)
-        unique_rules = sorted(unique_rules, key=lambda x: x['score'], reverse=True)[:top_k * 2]
+        # 统一变量名
+        unique_rules = all_retrieved_rules
 
         # ========== 阶段3: 综合分析与违规判定 ==========
         # 构建增强的 Prompt
@@ -329,6 +332,7 @@ class EnhancedAuditor:
     {{
       "type": "违规类型",
       "clause_id": "条文编号",
+      "source_file": "来源文件名",
       "clause_text": "条文原文",
       "reason": "违规原因（详细分析，包括显性和隐性违规）",
       "confidence": 0.0,
@@ -344,9 +348,10 @@ class EnhancedAuditor:
 1. 如果合规，violations 返回空数组。
 2. confidence 与 overall_confidence 取值范围 [0,1]。
 3. 必须引用上方出现的条文编号与原文。
-4. implicit_violations 字段列出可能的隐含违规（如条款间的关联违规）。
-5. context_analysis 字段分析上下文依赖和隐含逻辑。
-6. 考虑多个维度：文字表述、禁止用语、资质要求、风险提示。"""
+4. source_file 必须填写来源文件名（如"保险销售行为管理办法.pdf"）。
+5. implicit_violations 字段列出可能的隐含违规（如条款间的关联违规）。
+6. context_analysis 字段分析上下文依赖和隐含逻辑。
+7. 考虑多个维度：文字表述、禁止用语、资质要求、风险提示。"""
 
     @staticmethod
     def _extract_json(text: str) -> Dict[str, Any]:

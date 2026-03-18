@@ -21,9 +21,11 @@ import json
 from aliyun_rag.bailian_client import BailianClient
 from aliyun_rag.config import Settings
 from aliyun_rag.knowledge_base import load_knowledge_base
+from aliyun_rag.knowledge_base_milvus import load_knowledge_base as load_milvus_kb
 from aliyun_rag.auditor import audit_marketing_text
 from aliyun_rag.enhanced_auditor import enhanced_audit_marketing_text
 from aliyun_rag.multimodal_auditor import audit_marketing_image, audit_marketing_multimodal
+from aliyun_rag.extractors import extract_text_from_file
 
 
 def print_header(title):
@@ -50,9 +52,21 @@ def interactive_demo():
     settings = Settings.from_env()
     settings.validate()
     client = BailianClient(settings)
-    kb = load_knowledge_base('kb')
-    print("[OK] 资源加载成功！")
-    print(f"[KB] 知识库: {len(kb.chunks)} 个法规 chunks")
+
+    # 使用 Milvus 知识库（支持6路召回：3路稠密+3路稀疏）
+    try:
+        kb = load_milvus_kb(collection_name='insurance_knowledge', meta_dir='kb_milvus')
+        print("[OK] 资源加载成功！")
+        print(f"[KB] Milvus知识库: {len(kb.chunks)} 个法规 chunks")
+        print(f"[KB] 支持稀疏向量(BM25): 是")
+        print(f"[KB] 6路召回: 稠密x3 + 稀疏x3")
+    except Exception as e:
+        print(f"[!] Milvus知识库加载失败: {e}")
+        print("[*] 回退到 NumPy 知识库...")
+        kb = load_knowledge_base('kb')
+        print("[OK] NumPy知识库加载成功！")
+        print(f"[KB] 知识库: {len(kb.chunks)} 个法规 chunks")
+
     print(f"[VL] 多模态模型: {settings.vl_model}")
 
     while True:
@@ -60,15 +74,18 @@ def interactive_demo():
 
         print("请选择操作：")
         print("  1. 文本审核")
-        print("  2. 图片审核")
-        print("  3. 图文混合审核")
-        print("  4. 示例文案测试")
-        print("  5. 批量测试")
-        print("  6. 查看知识库统计")
+        print("  2. TXT文件审核")
+        print("  3. 图片审核")
+        print("  4. 图文混合审核")
+        print("  5. PDF文档审核 (OCR)")
+        print("  6. 示例文案测试")
+        print("  7. 批量测试（预设文案）")
+        print("  8. 批量测试目录（完整输出）")
+        print("  9. 查看知识库统计")
         print("  0. 退出")
         print()
 
-        choice = input("请输入选项 (0-6): ").strip()
+        choice = input("请输入选项 (0-9): ").strip()
 
         if choice == "0":
             print("\n再见！")
@@ -78,18 +95,27 @@ def interactive_demo():
             text_audit_demo(client, kb)
 
         elif choice == "2":
-            image_audit_demo(client, kb)
+            txt_file_audit_demo(client, kb)
 
         elif choice == "3":
-            multimodal_audit_demo(client, kb)
+            image_audit_demo(client, kb)
 
         elif choice == "4":
-            example_demo(client, kb)
+            multimodal_audit_demo(client, kb)
 
         elif choice == "5":
-            batch_demo(client, kb)
+            pdf_audit_demo(client, kb)
 
         elif choice == "6":
+            example_demo(client, kb)
+
+        elif choice == "7":
+            batch_demo(client, kb)
+
+        elif choice == "8":
+            batch_test_dir_demo(client, kb)
+
+        elif choice == "9":
             show_kb_stats(kb)
 
         else:
@@ -97,7 +123,7 @@ def interactive_demo():
 
 
 def text_audit_demo(client, kb):
-    """文本审核 Demo"""
+    """文本审核 Demo（使用增强审核器，6路召回）"""
     print_section("文本审核")
 
     marketing_text = input("请输入营销文案（输入 'q' 返回）: ").strip()
@@ -109,10 +135,11 @@ def text_audit_demo(client, kb):
         print("[!] 输入不能为空")
         return
 
-    print(f"\n[*] 开始审核...")
+    print(f"\n[*] 开始审核（6路召回：3路稠密+3路稀疏）...")
 
     try:
-        result = audit_marketing_text(
+        # 使用增强审核器（6路召回）
+        result = enhanced_audit_marketing_text(
             marketing_text=marketing_text,
             kb=kb,
             client=client,
@@ -122,6 +149,67 @@ def text_audit_demo(client, kb):
 
     except Exception as e:
         print(f"\n[!] 审核失败: {str(e)}")
+
+
+def txt_file_audit_demo(client, kb):
+    """TXT文件审核 Demo"""
+    print_section("TXT文件审核")
+
+    file_path = input("请输入TXT文件路径（输入 'q' 返回）: ").strip()
+
+    if file_path.lower() == 'q':
+        return
+
+    if not file_path:
+        print("[!] 输入不能为空")
+        return
+
+    # 检查文件是否存在
+    path = Path(file_path)
+    if not path.exists():
+        print(f"[!] 文件不存在: {file_path}")
+        return
+
+    # 检查文件格式
+    if path.suffix.lower() not in ['.txt', '.text']:
+        print(f"[!] 不支持的文件格式: {path.suffix}，请使用 .txt 文件")
+        return
+
+    print(f"\n[*] 正在读取文件: {file_path}")
+
+    try:
+        # 读取文件内容（优先 UTF-8）
+        with open(path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except UnicodeDecodeError:
+        # 如果utf-8解码失败，尝试gbk
+        try:
+            with open(path, 'r', encoding='gbk') as f:
+                text = f.read()
+        except Exception:
+            print("[!] 文件编码不支持，请使用 UTF-8 或 GBK 编码")
+            return
+
+    try:
+        print(f"[OK] 文件读取成功（{len(text)} 字符）")
+        print("\n--- 文件内容预览（前300字）---")
+        print(text[:300] + ("..." if len(text) > 300 else ""))
+        print("--- 预览结束 ---\n")
+
+        # 审核
+        print("[*] 开始审核...")
+        result = audit_marketing_text(
+            marketing_text=text,
+            kb=kb,
+            client=client,
+            top_k=6,
+        )
+        display_result(result, False)
+
+    except Exception as e:
+        print(f"\n[!] 审核失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 
 def image_audit_demo(client, kb):
@@ -238,6 +326,71 @@ def multimodal_audit_demo(client, kb):
         traceback.print_exc()
 
 
+def pdf_audit_demo(client, kb):
+    """PDF文档审核 Demo (使用 OCR)"""
+    print_section("PDF文档审核 (OCR)")
+
+    print("支持的文件格式: pdf")
+    file_path = input("请输入PDF文件路径（输入 'q' 返回）: ").strip()
+
+    if file_path.lower() == 'q':
+        return
+
+    if not file_path:
+        print("[!] 输入不能为空")
+        return
+
+    # 检查文件是否存在
+    path = Path(file_path)
+    if not path.exists():
+        print(f"[!] 文件不存在: {file_path}")
+        return
+
+    # 检查文件格式
+    if path.suffix.lower() != '.pdf':
+        print(f"[!] 不支持的文件格式: {path.suffix}")
+        return
+
+    # 询问最大处理页数
+    max_pages_input = input("请输入最大处理页数（直接回车处理全部，输入数字限制页数）: ").strip()
+    max_pages = int(max_pages_input) if max_pages_input.isdigit() else None
+
+    if max_pages:
+        print(f"\n[*] 正在处理PDF（最多 {max_pages} 页）...")
+    else:
+        print(f"\n[*] 正在处理PDF（全部页面）...")
+
+    try:
+        # 第一步：OCR提取PDF文本
+        print("[*] 使用 qwen-vl-plus 模型进行 OCR...")
+        extracted_text = extract_text_from_file(
+            file_path=file_path,
+            client=client,
+            pdf_mode="vl",  # 使用视觉模型OCR
+            max_pages=max_pages,
+        )
+
+        print(f"[OK] 文本提取完成（{len(extracted_text)} 字符）")
+        print("\n--- 提取的文本预览（前300字）---")
+        print(extracted_text[:300] + ("..." if len(extracted_text) > 300 else ""))
+        print("--- 预览结束 ---\n")
+
+        # 第二步：对提取的文本进行审核
+        print("[*] 开始审核提取的文本...")
+        result = audit_marketing_text(
+            marketing_text=extracted_text,
+            kb=kb,
+            client=client,
+            top_k=6,
+        )
+        display_result(result, False)
+
+    except Exception as e:
+        print(f"\n[!] 审核失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
 def example_demo(client, kb):
     """示例文案 Demo"""
     print_section("示例文案测试")
@@ -315,6 +468,266 @@ def batch_demo(client, kb):
     print(f"不合规数量: {len(results) - compliant_count}")
 
 
+def batch_test_dir_demo(client, kb):
+    """批量测试目录中的所有文件（完整输出）"""
+    print_section("批量测试目录（完整输出）")
+
+    # 默认目录
+    default_dir = "test_data_20260313"
+    dir_input = input(f"请输入测试目录路径（直接回车使用默认: {default_dir}）: ").strip()
+    test_dir = dir_input if dir_input else default_dir
+
+    test_path = Path(test_dir)
+    if not test_path.exists():
+        print(f"[!] 目录不存在: {test_dir}")
+        return
+
+    # 支持的文件格式
+    supported_extensions = {'.txt', '.pdf', '.png', '.jpg', '.jpeg'}
+
+    # 获取所有支持的文件
+    files = [f for f in test_path.iterdir() if f.is_file() and f.suffix.lower() in supported_extensions]
+    files.sort(key=lambda x: x.name)
+
+    if not files:
+        print(f"[!] 目录中没有支持的文件: {', '.join(supported_extensions)}")
+        return
+
+    print(f"\n[*] 找到 {len(files)} 个文件:")
+    for i, f in enumerate(files, 1):
+        print(f"  {i}. {f.name} ({f.suffix.lower()})")
+
+    # 询问是否继续
+    confirm = input("\n是否开始批量测试？(y/n): ").strip().lower()
+    if confirm != 'y':
+        print("[*] 已取消")
+        return
+
+    # PDF 最大页数
+    max_pages_input = input("\nPDF文件最大处理页数（直接回车处理全部，输入数字限制页数）: ").strip()
+    max_pages = int(max_pages_input) if max_pages_input.isdigit() else None
+
+    print("\n" + "=" * 70)
+    print("开始批量测试（完整输出）")
+    print("=" * 70 + "\n")
+
+    # 存储所有结果用于汇总
+    all_results = []
+
+    # 遍历所有文件
+    for idx, file_path in enumerate(files, 1):
+        print(f"\n{'#' * 70}")
+        print(f"文件 [{idx}/{len(files)}]: {file_path.name}")
+        print(f"{'#' * 70}\n")
+
+        try:
+            ext = file_path.suffix.lower()
+
+            # 根据文件类型处理
+            if ext == '.txt':
+                # TXT 文件
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+
+                result = audit_marketing_text(text, kb, client, top_k=6)
+                result['source_file'] = file_path.name
+                result['file_type'] = 'txt'
+                all_results.append(result)
+                display_result_full(result)
+
+            elif ext == '.pdf':
+                # PDF 文件
+                print(f"[*] 使用 OCR 提取 PDF 内容...")
+                extracted_text = extract_text_from_file(
+                    file_path=str(file_path),
+                    client=client,
+                    pdf_mode="vl",
+                    max_pages=max_pages,
+                )
+                print(f"[OK] 提取 {len(extracted_text)} 字符\n")
+
+                result = audit_marketing_text(extracted_text, kb, client, top_k=6)
+                result['source_file'] = file_path.name
+                result['file_type'] = 'pdf'
+                all_results.append(result)
+                display_result_full(result)
+
+            elif ext in {'.png', '.jpg', '.jpeg'}:
+                # 图片文件
+                mime_map = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg'}
+                image_mime = mime_map[ext]
+
+                print(f"[*] 读取图片并进行 OCR...")
+                with open(file_path, 'rb') as f:
+                    image_bytes = f.read()
+
+                result = audit_marketing_image(
+                    image_bytes=image_bytes,
+                    kb=kb,
+                    client=client,
+                    image_mime=image_mime,
+                    top_k=6,
+                )
+                result['source_file'] = file_path.name
+                result['file_type'] = 'image'
+                all_results.append(result)
+                display_image_result_full(result)
+
+        except Exception as e:
+            print(f"\n[!] 处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            all_results.append({
+                'source_file': file_path.name,
+                'file_type': ext,
+                'error': str(e),
+                'is_compliant': 'unknown'
+            })
+
+    # 输出汇总统计
+    print("\n\n" + "=" * 70)
+    print("批量测试汇总")
+    print("=" * 70 + "\n")
+
+    success_count = sum(1 for r in all_results if 'error' not in r)
+    error_count = len(all_results) - success_count
+
+    compliant_count = sum(1 for r in all_results if r.get('is_compliant') == 'yes')
+    non_compliant_count = sum(1 for r in all_results if r.get('is_compliant') == 'no')
+    unknown_count = len(all_results) - compliant_count - non_compliant_count - error_count
+
+    print(f"总文件数: {len(all_results)}")
+    print(f"成功处理: {success_count}")
+    print(f"处理失败: {error_count}")
+    print(f"\n合规: {compliant_count}")
+    print(f"违规: {non_compliant_count}")
+    print(f"未知: {unknown_count}")
+
+    # 详细结果列表
+    print("\n详细结果列表:")
+    for i, r in enumerate(all_results, 1):
+        if 'error' in r:
+            print(f"  {i}. [ERROR] {r['source_file']} - {r['error'][:50]}...")
+        else:
+            icon = "[OK]" if r['is_compliant'] == "yes" else "[X]" if r['is_compliant'] == "no" else "[?]"
+            conf = r.get('overall_confidence', 0)
+            print(f"  {i}. {icon} {r['source_file']} - {r['is_compliant'].upper()} (置信度: {conf:.2%})")
+
+    print("\n" + "=" * 70)
+
+
+def display_result_full(result):
+    """显示完整审核结果（不省略topk）"""
+    print("\n" + "-" * 70)
+    print("审核结果")
+    print("-" * 70 + "\n")
+
+    # 是否合规
+    is_compliant = result.get('is_compliant', 'unknown')
+    status_icon = "[OK]" if is_compliant == "yes" else "[X]"
+    print(f"{status_icon} 是否合规: {is_compliant.upper()}")
+
+    # 置信度
+    if 'calculated_confidence' in result:
+        print(f"\n置信度分析:")
+        print(f"   - LLM置信度: {result['llm_confidence']:.2%}")
+        print(f"   - 计算置信度: {result['calculated_confidence']:.2%}")
+        print(f"   - 融合置信度: {result['overall_confidence']:.2%}")
+    else:
+        print(f"\n整体置信度: {result.get('overall_confidence', 0):.2%}")
+
+    # 总结
+    print(f"\n总结: {result.get('summary', 'N/A')}")
+
+    # 违规项
+    violations = result.get('violations', [])
+    if violations:
+        print(f"\n违规项 ({len(violations)}):")
+        for i, v in enumerate(violations, 1):
+            print(f"\n  [{i}] {v.get('type', 'N/A')}")
+            print(f"      条文: {v.get('clause_id', 'N/A')}")
+            source = v.get('source_file', 'N/A')
+            if source and source != 'N/A':
+                short_name = source.replace('.docx', '').replace('.pdf', '').replace('（征求意见稿）', '')
+                print(f"      来源: {short_name}")
+            print(f"      置信度: {v.get('confidence', 0):.2%}")
+            print(f"      原因: {v.get('reason', 'N/A')}")
+    else:
+        print("\n[OK] 无违规项")
+
+    # 检索到的条文（完整输出，不省略）
+    rules = result.get('retrieved_rules', [])
+    print(f"\n检索到的相关条文 (共 {len(rules)} 条):")
+    for i, rule in enumerate(rules, 1):
+        print(f"\n  [{i}] {rule.get('clause_id', 'N/A')} | 相似度: {rule.get('score', 0):.4f}")
+        print(f"      来源: {rule.get('source_file', 'N/A')}")
+        print(f"      条文: {rule.get('clause_text', 'N/A')}")
+
+    print("\n" + "-" * 70)
+
+
+def display_image_result_full(result):
+    """显示完整图片审核结果（不省略topk）"""
+    print("\n" + "-" * 70)
+    print("图片审核结果")
+    print("-" * 70 + "\n")
+
+    # 图片分析结果
+    if 'image_analysis' in result:
+        img_analysis = result['image_analysis']
+        print("[IMG] 图片分析:")
+
+        if 'extracted_text' in img_analysis:
+            extracted = img_analysis['extracted_text']
+            if extracted:
+                print(f"  提取文字: {extracted}")
+
+        if 'visual_elements' in img_analysis and img_analysis['visual_elements']:
+            print(f"  视觉元素: {', '.join(img_analysis['visual_elements'])}")
+
+        if 'detected_issues' in img_analysis and img_analysis['detected_issues']:
+            print(f"  检测问题: {', '.join(img_analysis['detected_issues'])}")
+
+        print()
+
+    # 是否合规
+    is_compliant = result.get('is_compliant', 'unknown')
+    status_icon = "[OK]" if is_compliant == "yes" else "[X]"
+    print(f"{status_icon} 是否合规: {is_compliant.upper()}")
+
+    # 置信度
+    print(f"\n整体置信度: {result.get('overall_confidence', 0):.2%}")
+
+    # 总结
+    print(f"\n总结: {result.get('summary', 'N/A')}")
+
+    # 违规项
+    violations = result.get('violations', [])
+    if violations:
+        print(f"\n违规项 ({len(violations)}):")
+        for i, v in enumerate(violations, 1):
+            print(f"\n  [{i}] {v.get('type', 'N/A')}")
+            print(f"      条文: {v.get('clause_id', 'N/A')}")
+            source = v.get('source_file', 'N/A')
+            if source and source != 'N/A':
+                short_name = source.replace('.docx', '').replace('.pdf', '').replace('（征求意见稿）', '')
+                print(f"      来源: {short_name}")
+            print(f"      置信度: {v.get('confidence', 0):.2%}")
+            print(f"      原因: {v.get('reason', 'N/A')}")
+    else:
+        print("\n[OK] 无违规项")
+
+    # 检索到的条文（完整输出）
+    rules = result.get('retrieved_rules', [])
+    print(f"\n检索到的相关条文 (共 {len(rules)} 条):")
+    for i, rule in enumerate(rules, 1):
+        print(f"\n  [{i}] {rule.get('clause_id', 'N/A')} | 相似度: {rule.get('score', 0):.4f}")
+        print(f"      来源: {rule.get('source_file', 'N/A')}")
+        print(f"      条文: {rule.get('clause_text', 'N/A')}")
+
+    print("\n" + "-" * 70)
+
+
 def show_kb_stats(kb):
     """显示知识库统计"""
     print_section("知识库统计")
@@ -377,6 +790,11 @@ def display_result(result, use_enhanced):
         for i, v in enumerate(violations, 1):
             print(f"\n  [{i}] {v.get('type', 'N/A')}")
             print(f"      条文: {v.get('clause_id', 'N/A')}")
+            source = v.get('source_file', 'N/A')
+            if source and source != 'N/A':
+                # 简化文件名显示
+                short_name = source.replace('.docx', '').replace('.pdf', '').replace('（征求意见稿）', '')
+                print(f"      来源: {short_name}")
             if 'llm_confidence' in v:
                 print(f"      置信度: LLM={v['llm_confidence']:.2%}, 计算={v['calculated_confidence']:.2%}")
             else:
@@ -441,6 +859,11 @@ def display_image_result(result):
         for i, v in enumerate(violations, 1):
             print(f"\n  [{i}] {v.get('type', 'N/A')}")
             print(f"      条文: {v.get('clause_id', 'N/A')}")
+            source = v.get('source_file', 'N/A')
+            if source and source != 'N/A':
+                # 简化文件名显示
+                short_name = source.replace('.docx', '').replace('.pdf', '').replace('（征求意见稿）', '')
+                print(f"      来源: {short_name}")
             print(f"      置信度: {v.get('confidence', 0):.2%}")
             print(f"      原因: {v.get('reason', 'N/A')[:100]}...")
     else:

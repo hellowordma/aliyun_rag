@@ -367,46 +367,80 @@ class BailianClient:
 图片输入 → audit_marketing_image() → client.analyze_marketing_image() → qwen-vl-plus
 ```
 
-### 2. RAG 混合检索设计
+### 2. RAG 6路召回设计
 
-#### 检索流程
+#### 召回架构
+
+```
+问题重写（3个查询）
+    │
+    ├── Query 1: 原始输入
+    ├── Query 2: 意图重写查询
+    └── Query 3: 通用合规查询
+        │
+        ├───┴───┬───┴───┐
+        ▼       ▼       ▼
+   ┌────────────────────────┐
+   │  3路稠密向量检索        │
+   │  (qwen-plus embedding)  │
+   └────────────────────────┘
+        │       ▼       ▼
+   ┌────────────────────────┐
+   │  3路稀疏向量检索        │
+   │  (BM25 + jieba分词)     │
+   └────────────────────────┘
+        │       │       │
+        └───┬───┴───┬───┘
+            ▼       ▼
+      ┌─────────────────┐
+      │  RRF 融合       │
+      │  0.7×稠密+0.3×稀疏 │
+      └─────────────────┘
+            │
+            ▼
+      最终召回结果
+```
+
+#### 代码实现 (knowledge_base_milvus.py)
 
 ```python
-# hybrid_retriever.py
+def hybrid_retrieve(queries, kb, client, top_k=6):
+    """6路召回 = 3路稠密 + 3路稀疏"""
+    all_results = []
 
-def retrieve(query, kb, client, retriever, top_k):
-    # 1. 并行执行两种检索
-    dense_results = dense_retrieve(query, top_k=20)  # 向量检索
-    sparse_results = sparse_retrieve(query, top_k=20)  # BM25检索
+    # 3路稠密检索
+    for query in queries[:3]:
+        dense_results = retrieve_dense(query, kb, client, top_k)
+        all_results.extend(dense_results)
 
-    # 2. RRF融合
-    fused = _fuse_results(dense_results, sparse_results)
+    # 3路稀疏检索 (BM25)
+    for query in queries[:3]:
+        sparse_results = retrieve_sparse(query, kb, client, top_k)
+        all_results.extend(sparse_results)
 
-    # 3. 返回Top-K
-    return fused[:top_k]
+    # RRF融合
+    return _fuse_results(all_results, dense_weight=0.7, sparse_weight=0.3)
 
-def _fuse_results(dense_results, sparse_results):
+def _fuse_results(results, dense_weight, sparse_weight, top_k):
     k = 60  # RRF常数
-    fused = {}
+    fused_scores = {}
 
-    # 向量检索权重: 0.7
-    for i, item in enumerate(dense_results):
-        fused[item['id']] = 0.7 * (1 / (k + i + 1))
-
-    # BM25检索权重: 0.3
-    for i, item in enumerate(sparse_results):
-        score = 0.3 * (1 / (k + i + 1))
-        fused[item['id']] = fused.get(item['id'], 0) + score
-
-    return sorted(fused.items(), key=lambda x: x[1], reverse=True)
+    for result in results:
+        if result['retrieval_type'] == 'dense':
+            weight = dense_weight
+        else:
+            weight = sparse_weight
+        # 计算RRF分数
+        rrf_score = weight * (1 / (k + rank + 1))
+        fused_scores[key] = fused_scores.get(key, 0) + rrf_score
 ```
 
 #### 权重配置
 
 | 检索方式 | 权重 | 说明 |
 |---------|------|------|
-| 向量检索 | 0.7 | 语义相似，捕捉隐含关系 |
-| BM25检索 | 0.3 | 精确匹配，专业术语准确 |
+| 稠密向量 | 0.7 | qwen-plus embedding，语义相似 |
+| 稀疏向量 (BM25) | 0.3 | jieba分词，精确匹配关键词 |
 
 ### 3. 置信度计算公式
 

@@ -1,8 +1,10 @@
 {
-  "created_at": "2026-03-09T03:21:38",
-  "num_chunks": 137,
+  "created_at": "2026-03-09T15:30:21",
+  "num_chunks": 176,
   "embedding_model": "text-embedding-v3",
   "pdf_mode": "vl",
   "vector_db": "milvus",
-  "collection_name": "insurance_knowledge"
+  "collection_name": "insurance_knowledge",
+  "enable_sparse": true,
+  "hybrid_search": true
 }
